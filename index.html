@@ -1,335 +1,383 @@
-<!DOCTYPE html>
-<html lang="id">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Kamus Visual Arab-Indonesia AI</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
-    <style>
-        @import url('https://fonts.googleapis.com/css2?family=Amiri&family=Inter:wght@400;600;700&display=swap');
-        
-        body {
-            font-family: 'Inter', sans-serif;
-            background-color: #f0f4f8;
+import React, { useState, useEffect } from 'react';
+import { Search, Volume2, Book, Image as ImageIcon, Loader2, Languages, Sparkles, MessageCircle, BrainCircuit, PenTool } from 'lucide-react';
+
+// API Key dikosongkan kembali ke bawaan untuk menggunakan runtime environment
+const apiKey = "AIzaSyCr2iyR49HL3hm94LrLkk_J_AUb37wd5_c"; 
+
+export default function App() {
+  const [query, setQuery] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [result, setResult] = useState(null);
+  const [imageUrl, setImageUrl] = useState(null);
+  const [error, setError] = useState(null);
+  const [isPlaying, setIsPlaying] = useState(false);
+  
+  // State untuk fitur tambahan Gemini
+  const [aiStory, setAiStory] = useState(null); 
+  const [aiQuiz, setAiQuiz] = useState(null);
+  const [userQuizAnswer, setUserQuizAnswer] = useState("");
+  const [quizFeedback, setQuizFeedback] = useState(null);
+
+  const appId = typeof __app_id !== 'undefined' ? __app_id : 'kamus-arab-indo-v1';
+
+  const fetchWithRetry = async (url, options, retries = 5, backoff = 1000) => {
+    try {
+      const response = await fetch(url, options);
+      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+      return await response.json();
+    } catch (err) {
+      if (retries > 0) {
+        await new Promise(resolve => setTimeout(resolve, backoff));
+        return fetchWithRetry(url, options, retries - 1, backoff * 2);
+      }
+      throw err;
+    }
+  };
+
+  // 1. Utama: Terjemahan & Gambar
+  const handleTranslate = async () => {
+    if (!query.trim()) return;
+    setLoading(true);
+    setError(null);
+    setResult(null);
+    setImageUrl(null);
+    setAiStory(null);
+    setAiQuiz(null);
+    setQuizFeedback(null);
+
+    const systemPrompt = `
+      You are an Arabic-Indonesian dictionary expert for children. 
+      Analyze the input word. Return JSON:
+      {
+        "word": "The Arabic version of the word",
+        "indo_term": "The Indonesian version of the word",
+        "translation": "translated meaning",
+        "type": "Noun/Verb",
+        "sentences": [
+          {"arabic": "sentence 1", "indo": "translation 1"},
+          {"arabic": "sentence 2", "indo": "translation 2"},
+          {"arabic": "sentence 3", "indo": "translation 3"}
+        ],
+        "image_prompt": "Islamic illustration, NO eyes/facial features if living being, soft pastel colors, simple shapes"
+      }
+      IMPORTANT: Always provide EXACTLY 3 example sentences. 
+      The "word" field should ALWAYS contain the Arabic script/term for consistent audio playback.
+    `;
+
+    try {
+      const data = await fetchWithRetry(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: `Translate and give 3 sentences for: ${query}` }] }],
+            systemInstruction: { parts: [{ text: systemPrompt }] },
+            generationConfig: { responseMimeType: "application/json" }
+          })
         }
-        .arabic-text {
-            font-family: 'Amiri', serif;
-            direction: rtl;
+      );
+
+      const parsedResult = JSON.parse(data.candidates[0].content.parts[0].text);
+      setResult(parsedResult);
+      handleGenerateImage(parsedResult.image_prompt);
+    } catch (err) {
+      setError("Gagal mengambil data. Silakan coba lagi nanti.");
+      setLoading(false);
+    }
+  };
+
+  const handleGenerateImage = async (prompt) => {
+    try {
+      const response = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/imagen-4.0-generate-001:predict?key=${apiKey}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            instances: { prompt: prompt },
+            parameters: { sampleCount: 1 }
+          })
         }
-        .loading-shimmer {
-            background: linear-gradient(90deg, #e2e8f0 25%, #f8fafc 50%, #e2e8f0 75%);
-            background-size: 200% 100%;
-            animation: shimmer 1.5s infinite;
+      );
+      const data = await response.json();
+      if (data.predictions?.[0]) {
+        setImageUrl(`data:image/png;base64,${data.predictions[0].bytesBase64Encoded}`);
+      }
+    } catch (err) {
+      console.error("Image gen error", err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const generateAiStory = async () => {
+    if (!result) return;
+    setAiLoading(true);
+    try {
+      const data = await fetchWithRetry(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: `Buatkan cerita islami sangat pendek (3-4 kalimat) untuk anak usia 9 tahun menggunakan kata "${result.word}" (${result.indo_term}). Berikan respon dalam JSON: {"indo": "teks indonesia", "arabic": "teks arab dengan harokat"}` }] }],
+            generationConfig: { responseMimeType: "application/json" }
+          })
         }
-        @keyframes shimmer {
-            0% { background-position: 200% 0; }
-            100% { background-position: -200% 0; }
+      );
+      setAiStory(JSON.parse(data.candidates[0].content.parts[0].text));
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
+  const generateQuiz = async () => {
+    if (!result) return;
+    setAiLoading(true);
+    try {
+      const data = await fetchWithRetry(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: `Buat kuis pilihan ganda sederhana tentang kata "${result.word}" dalam format JSON: {"question": "...", "options": ["A", "B", "C"], "correct": "A"}` }] }],
+            generationConfig: { responseMimeType: "application/json" }
+          })
         }
-        .animate-fade-in {
-            animation: fadeIn 0.5s ease-out;
-        }
-        @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(10px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-    </style>
-</head>
-<body class="min-h-screen p-4 md:p-8">
-    <div class="max-w-2xl mx-auto">
-        <!-- Header -->
-        <header class="text-center mb-8">
-            <div class="inline-block p-3 bg-emerald-100 rounded-full mb-4">
-                <i class="fas fa-mosque text-emerald-600 text-3xl"></i>
-            </div>
-            <h1 class="text-4xl font-bold text-slate-800 mb-2">Kamus Visual Islami</h1>
-            <p class="text-slate-600">Pelajari Bahasa Arab dengan AI ✨</p>
+      );
+      setAiQuiz(JSON.parse(data.candidates[0].content.parts[0].text));
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
+  const checkQuiz = (selected) => {
+    setUserQuizAnswer(selected);
+    if (selected === aiQuiz.correct) {
+      setQuizFeedback("Maa syaa Allah! Jawaban Anda benar! 🎉");
+    } else {
+      setQuizFeedback(`Coba lagi! Jawaban yang benar adalah ${aiQuiz.correct}`);
+    }
+  };
+
+  const playAudio = async (text, forceArabic = false) => {
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+      const utterance = new SpeechSynthesisUtterance(text);
+      
+      const isArabic = forceArabic || /[\u0600-\u06FF]/.test(text);
+      utterance.lang = isArabic ? 'ar-SA' : 'id-ID';
+      
+      // Pengaturan Suara Laki-laki Remaja
+      utterance.pitch = 1.1; 
+      utterance.rate = 0.75; 
+      
+      window.speechSynthesis.speak(utterance);
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-[#F8FAFC] p-4 md:p-8 font-sans text-slate-800">
+      <div className="max-w-4xl mx-auto">
+        {/* Header */}
+        <header className="text-center mb-10">
+          <div className="inline-block bg-emerald-600 p-4 rounded-3xl shadow-xl shadow-emerald-100 mb-4">
+            <Languages className="text-white w-10 h-10" />
+          </div>
+          <h1 className="text-4xl font-extrabold text-slate-900 tracking-tight">Kamus Anak Sholeh</h1>
+          <p className="text-slate-500 mt-2 font-medium">Belajar Bahasa Al-Qur'an dengan Cerdas & Menyenangkan</p>
         </header>
 
-        <!-- Search Section -->
-        <div class="bg-white rounded-3xl shadow-xl border border-slate-100 p-6 mb-8">
-            <div class="space-y-4">
-                <div class="relative">
-                    <input 
-                        type="text" 
-                        id="searchInput"
-                        placeholder="Masukkan kata (Contoh: Buku, Rumah)..." 
-                        class="w-full pl-12 pr-4 py-4 rounded-2xl border-2 border-slate-100 focus:border-emerald-500 focus:outline-none text-lg transition-colors"
+        {/* Bar Pencarian */}
+        <div className="relative mb-10 group">
+          <div className="absolute inset-0 bg-emerald-500 blur-xl opacity-10 group-hover:opacity-20 transition-opacity rounded-3xl"></div>
+          <div className="relative flex gap-2">
+            <input
+              type="text"
+              className="flex-1 p-5 rounded-2xl border-2 border-white bg-white shadow-lg focus:border-emerald-500 focus:outline-none text-lg transition-all"
+              placeholder="Ketik kata Arab atau Indonesia..."
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyPress={(e) => e.key === 'Enter' && handleTranslate()}
+            />
+            <button
+              onClick={handleTranslate}
+              disabled={loading}
+              className="bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 text-white px-8 rounded-2xl transition-all shadow-lg flex items-center gap-2 font-bold"
+            >
+              {loading ? <Loader2 className="animate-spin" /> : <><Search size={20} /> Cari</>}
+            </button>
+          </div>
+        </div>
+
+        {error && <div className="bg-red-50 text-red-600 p-4 rounded-2xl mb-6 text-center border border-red-100">{error}</div>}
+
+        {result && (
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 animate-in fade-in slide-in-from-bottom-4 duration-700">
+            
+            {/* Kolom Utama: Kata & Gambar */}
+            <div className="lg:col-span-2 space-y-6">
+              <div className="bg-white rounded-3xl p-8 shadow-sm border border-slate-100 relative overflow-hidden">
+                <div className="absolute top-0 right-0 p-4">
+                  <span className="bg-emerald-50 text-emerald-700 px-4 py-1 rounded-full text-xs font-bold uppercase">
+                    {result.type}
+                  </span>
+                </div>
+                
+                <div className="flex flex-col md:flex-row items-center gap-8">
+                  <div className="flex-1 text-center md:text-left">
+                    <h2 className="text-6xl font-bold text-emerald-600 mb-2 leading-tight" dir="rtl">{result.word}</h2>
+                    <p className="text-3xl text-slate-500 font-medium mb-4">{result.indo_term || result.translation}</p>
+                    <button 
+                      onClick={() => playAudio(result.word, true)}
+                      className="inline-flex items-center gap-2 bg-slate-100 hover:bg-emerald-100 text-emerald-700 px-6 py-3 rounded-2xl transition-all font-bold"
                     >
-                    <i class="fas fa-search absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 text-xl"></i>
+                      <Volume2 size={24} /> Dengar (Arab)
+                    </button>
+                  </div>
+
+                  <div className="w-56 h-56 bg-slate-50 rounded-[2.5rem] border-4 border-white shadow-inner flex items-center justify-center overflow-hidden relative">
+                    {imageUrl ? (
+                      <img src={imageUrl} alt="Ilustrasi" className="w-full h-full object-cover" />
+                    ) : (
+                      <div className="text-center p-4">
+                        <ImageIcon className="w-12 h-12 mx-auto text-slate-200 mb-2" />
+                        <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest text-center">Menghasilkan Gambar...</p>
+                      </div>
+                    )}
+                  </div>
                 </div>
-                <button 
-                    onclick="handleSearch()"
-                    id="searchBtn"
-                    class="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-4 rounded-2xl shadow-lg shadow-emerald-200 transition-all active:scale-95 flex items-center justify-center gap-2"
-                >
-                    <i class="fas fa-magic"></i> Cari & Analisis ✨
-                </button>
-            </div>
-        </div>
+              </div>
 
-        <!-- Error Message (Hidden by default) -->
-        <div id="errorMessage" class="hidden mb-6 p-4 bg-red-50 border border-red-100 text-red-600 rounded-2xl text-center text-sm font-medium">
-        </div>
-
-        <!-- Result Content -->
-        <div id="resultContainer" class="hidden space-y-6 animate-fade-in">
-            <!-- Main Result Card -->
-            <div class="bg-white rounded-3xl shadow-md border border-slate-100 overflow-hidden">
-                <div class="p-8 border-b border-slate-50">
-                    <div class="flex flex-col md:flex-row justify-between items-center gap-6">
-                        <div class="text-center md:text-left">
-                            <span class="px-3 py-1 bg-emerald-50 text-emerald-600 rounded-full text-xs font-bold uppercase tracking-widest mb-2 inline-block font-sans">Terjemahan</span>
-                            <h2 id="targetWord" class="text-3xl font-bold text-slate-800 mb-1">...</h2>
-                            <div class="flex items-center justify-center md:justify-start gap-4 mt-2">
-                                <p id="translatedWord" class="arabic-text text-5xl text-emerald-700 font-medium">...</p>
-                                <button onclick="playAudio('translatedWord')" class="p-3 bg-emerald-100 text-emerald-700 rounded-2xl hover:bg-emerald-200 transition-colors">
-                                    <i class="fas fa-volume-up text-xl"></i>
-                                </button>
-                            </div>
-                        </div>
-                        <div class="w-full md:w-48 aspect-square relative rounded-2xl overflow-hidden bg-slate-50 border border-slate-100">
-                            <div id="imageLoader" class="absolute inset-0 loading-shimmer z-10 hidden"></div>
-                            <img id="resultImage" class="w-full h-full object-cover hidden" alt="Visual AI">
-                            <div id="imagePlaceholder" class="flex flex-col items-center justify-center h-full text-slate-300">
-                                <i class="fas fa-image text-4xl mb-2"></i>
-                                <span class="text-xs">Gambar AI</span>
-                            </div>
-                        </div>
+              {/* Contoh Kalimat */}
+              <div className="bg-white rounded-3xl p-8 shadow-sm border border-slate-100">
+                <div className="flex items-center gap-3 mb-6">
+                  <div className="p-2 bg-emerald-100 rounded-lg text-emerald-600"><Book size={20} /></div>
+                  <h3 className="font-bold text-xl">Contoh dalam Kalimat</h3>
+                </div>
+                <div className="space-y-6">
+                  {result.sentences.map((s, idx) => (
+                    <div key={idx} className="group p-5 rounded-2xl border border-slate-50 hover:border-emerald-100 hover:bg-emerald-50/30 transition-all">
+                      <div className="flex justify-between items-start gap-4">
+                        <button onClick={() => playAudio(s.arabic, true)} className="p-2 text-emerald-600 hover:scale-110 transition-transform"><Volume2 size={20}/></button>
+                        <p className="text-2xl font-medium text-right flex-1" dir="rtl">{s.arabic}</p>
+                      </div>
+                      <p className="text-slate-500 mt-2 italic text-sm">"{s.indo}"</p>
                     </div>
+                  ))}
                 </div>
+              </div>
+            </div>
 
-                <div class="p-6 bg-slate-50/50">
-                    <h3 class="text-sm font-bold text-slate-400 uppercase tracking-widest mb-3 flex items-center gap-2">
-                        <i class="fas fa-brain text-emerald-500"></i> Tata Bahasa
-                    </h3>
-                    <p id="grammarContent" class="text-slate-700 leading-relaxed text-sm"></p>
+            {/* Kolom Samping: Fitur AI ✨ */}
+            <div className="space-y-6">
+              {/* ✨ Fitur Cerita Bilingual */}
+              <div className="bg-gradient-to-br from-emerald-600 to-teal-700 rounded-3xl p-6 text-white shadow-lg shadow-emerald-200">
+                <div className="flex items-center gap-2 mb-4">
+                  <Sparkles size={20} className="text-emerald-200" />
+                  <h3 className="font-bold">✨ Kisah Bilingual</h3>
                 </div>
-            </div>
+                {aiStory ? (
+                  <div className="space-y-4">
+                    <div className="bg-white/10 p-4 rounded-2xl relative group">
+                      <button 
+                        onClick={() => playAudio(aiStory.arabic, true)}
+                        className="absolute left-2 top-2 p-1 text-emerald-200 hover:text-white transition-colors"
+                      >
+                        <Volume2 size={16} />
+                      </button>
+                      <p className="text-xl font-medium text-right leading-loose" dir="rtl">
+                        {aiStory.arabic}
+                      </p>
+                    </div>
+                    <p className="text-emerald-50 text-sm leading-relaxed italic px-1">
+                      "{aiStory.indo}"
+                    </p>
+                  </div>
+                ) : (
+                  <p className="text-emerald-100/70 text-xs mb-4">Ingin tahu cerita pendek dalam 2 bahasa tentang kata ini?</p>
+                )}
+                <button 
+                  onClick={generateAiStory}
+                  disabled={aiLoading}
+                  className="w-full mt-4 py-3 bg-white/20 hover:bg-white/30 rounded-xl font-bold text-sm transition-all flex items-center justify-center gap-2"
+                >
+                  {aiLoading ? <Loader2 className="animate-spin" size={16} /> : <><PenTool size={16} /> ✨ Buat Cerita Arab-Indo</>}
+                </button>
+              </div>
 
-            <!-- Example List -->
-            <div class="bg-white rounded-3xl shadow-md border border-slate-100 p-6">
-                <h3 class="font-bold text-slate-800 mb-6 flex items-center gap-2">
-                    <i class="fas fa-list-ul text-emerald-500"></i> Contoh Kalimat
-                </h3>
-                <div id="examplesList" class="space-y-6"></div>
-            </div>
-        </div>
-
-        <!-- Empty State -->
-        <div id="emptyState" class="text-center py-20">
-            <div class="text-slate-200 text-8xl mb-6">
-                <i class="fas fa-book-open"></i>
-            </div>
-            <p class="text-slate-500 font-medium">Masukkan kata untuk memulai pengalaman belajar AI</p>
-        </div>
-
-        <footer class="mt-12 text-center">
-            <p class="text-slate-400 text-xs tracking-widest uppercase">Digital Islamic Learning Tool</p>
-        </footer>
-    </div>
-
-    <script>
-        // API Key Baru Anda
-        const apiKey = "AIzaSyCQlUlJXkhPupzqXGoTgKJOhXZockDurFw"; 
-        
-        // Menggunakan model 1.5-flash untuk stabilitas publik
-        const MODEL_NAME = "gemini-1.5-flash"; 
-
-        let currentData = null;
-        let audioMap = {};
-
-        function showError(msg) {
-            const errDiv = document.getElementById('errorMessage');
-            errDiv.innerText = msg;
-            errDiv.classList.remove('hidden');
-        }
-
-        function hideError() {
-            document.getElementById('errorMessage').classList.add('hidden');
-        }
-
-        async function handleSearch() {
-            const input = document.getElementById('searchInput');
-            const query = input.value.trim();
-            if (!query) return;
-
-            const btn = document.getElementById('searchBtn');
-            const resultContainer = document.getElementById('resultContainer');
-            const emptyState = document.getElementById('emptyState');
-            const imageLoader = document.getElementById('imageLoader');
-            const resultImage = document.getElementById('resultImage');
-            const imagePlaceholder = document.getElementById('imagePlaceholder');
-
-            hideError();
-            btn.disabled = true;
-            btn.innerHTML = '<i class="fas fa-circle-notch fa-spin mr-2"></i>Proses...';
-            audioMap = {};
-
-            try {
-                const systemPrompt = `Anda adalah ahli bahasa Arab. Berikan respon dalam JSON murni:
-                {
-                    "word": "kata asal",
-                    "translation": "terjemahan harakat lengkap",
-                    "grammar_analysis": "Penjelasan singkat tata bahasa Arab.",
-                    "examples": [
-                        {"ar": "kalimat arab", "id": "arti indonesia"}
-                    ],
-                    "image_prompt": "simple object name in english for illustration"
-                }`;
-
-                const textResponse = await callGemini(query, systemPrompt);
-                currentData = JSON.parse(textResponse);
-
-                document.getElementById('targetWord').innerText = currentData.word;
-                document.getElementById('translatedWord').innerText = currentData.translation;
-                document.getElementById('grammarContent').innerText = currentData.grammar_analysis;
+              <div className="bg-white rounded-3xl p-6 shadow-sm border border-emerald-100">
+                <div className="flex items-center gap-2 mb-4 text-emerald-700">
+                  <BrainCircuit size={20} />
+                  <h3 className="font-bold">✨ Tantangan Hafalan</h3>
+                </div>
                 
-                audioMap['translatedWord'] = currentData.translation;
-
-                const list = document.getElementById('examplesList');
-                list.innerHTML = '';
-                currentData.examples.forEach((ex, i) => {
-                    audioMap[`ex_${i}`] = ex.ar;
-                    const item = document.createElement('div');
-                    item.className = "flex items-start gap-4 p-4 rounded-2xl bg-slate-50 border border-slate-100";
-                    item.innerHTML = `
-                        <button onclick="playAudio('ex_${i}')" class="mt-1 p-2 bg-white text-emerald-600 rounded-xl shadow-sm hover:bg-emerald-50 transition-colors">
-                            <i class="fas fa-volume-up"></i>
+                {!aiQuiz ? (
+                  <button 
+                    onClick={generateQuiz}
+                    className="w-full py-4 border-2 border-dashed border-emerald-200 text-emerald-600 rounded-2xl font-bold hover:bg-emerald-50 transition-all"
+                  >
+                    Uji Hafalan Anda!
+                  </button>
+                ) : (
+                  <div className="space-y-4">
+                    <p className="text-sm font-bold text-slate-700">{aiQuiz.question}</p>
+                    <div className="grid grid-cols-1 gap-2">
+                      {aiQuiz.options.map(opt => (
+                        <button
+                          key={opt}
+                          onClick={() => checkQuiz(opt)}
+                          className={`p-3 rounded-xl text-sm font-medium transition-all text-left ${
+                            userQuizAnswer === opt 
+                              ? (opt === aiQuiz.correct ? 'bg-emerald-500 text-white' : 'bg-red-500 text-white')
+                              : 'bg-slate-50 hover:bg-slate-100'
+                          }`}
+                        >
+                          {opt}
                         </button>
-                        <div class="flex-1 text-right">
-                            <p class="arabic-text text-2xl text-slate-800">${ex.ar}</p>
-                            <p class="text-slate-500 text-sm mt-1 text-left">${ex.id}</p>
-                        </div>
-                    `;
-                    list.appendChild(item);
-                });
+                      ))}
+                    </div>
+                    {quizFeedback && (
+                      <div className="mt-2 p-3 bg-emerald-50 text-emerald-700 rounded-xl text-xs font-bold text-center animate-bounce">
+                        {quizFeedback}
+                      </div>
+                    )}
+                    <button onClick={generateQuiz} className="text-[10px] uppercase font-black text-slate-400 hover:text-emerald-600 block mx-auto tracking-widest">Soalan Lain</button>
+                  </div>
+                )}
+              </div>
 
-                emptyState.classList.add('hidden');
-                resultContainer.classList.remove('hidden');
+              <div className="bg-amber-50 rounded-3xl p-6 border border-amber-100 text-center">
+                <div className="w-10 h-10 bg-amber-200 rounded-full flex items-center justify-center mx-auto mb-3 text-amber-700">
+                  <MessageCircle size={20} />
+                </div>
+                <p className="text-[11px] text-amber-800 font-medium">"Barangsiapa yang menempuh jalan untuk mencari ilmu, maka Allah akan mudahkan baginya jalan menuju surga."</p>
+                <p className="text-[9px] text-amber-600 mt-2 font-bold">(HR. Muslim)</p>
+              </div>
+            </div>
+          </div>
+        )}
 
-                // Generate Gambar (Seringkali memerlukan izin khusus pada API Key, namun tetap dijalankan sebagai bonus)
-                imageLoader.classList.remove('hidden');
-                resultImage.classList.add('hidden');
-                imagePlaceholder.classList.add('hidden');
-
-                try {
-                    const imgUrl = await generateImage(`Minimalist clean illustration of ${currentData.image_prompt}, faceless style.`);
-                    if (imgUrl) {
-                        resultImage.src = imgUrl;
-                        resultImage.onload = () => {
-                            imageLoader.classList.add('hidden');
-                            resultImage.classList.remove('hidden');
-                        };
-                    } else {
-                        throw new Error();
-                    }
-                } catch (e) {
-                    imageLoader.classList.add('hidden');
-                    imagePlaceholder.classList.remove('hidden');
-                }
-
-            } catch (err) {
-                console.error(err);
-                showError("Gagal terhubung ke AI: " + (err.message || "Pastikan API Key valid dan kuota mencukupi."));
-            } finally {
-                btn.disabled = false;
-                btn.innerHTML = '<i class="fas fa-magic"></i> Cari & Analisis ✨';
-            }
-        }
-
-        async function callGemini(query, systemPrompt) {
-            const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL_NAME}:generateContent?key=${apiKey}`;
-            const response = await fetch(url, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    contents: [{ parts: [{ text: query }] }],
-                    systemInstruction: { parts: [{ text: systemPrompt }] },
-                    generationConfig: { responseMimeType: "application/json" }
-                })
-            });
-            
-            if (!response.ok) {
-                const errData = await response.json();
-                throw new Error(errData.error?.message || "API Request Failed");
-            }
-            
-            const result = await response.json();
-            return result.candidates[0].content.parts[0].text;
-        }
-
-        async function generateImage(prompt) {
-            const url = `https://generativelanguage.googleapis.com/v1beta/models/imagen-4.0-generate-001:predict?key=${apiKey}`;
-            try {
-                const response = await fetch(url, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        instances: [{ prompt: prompt }],
-                        parameters: { sampleCount: 1 }
-                    })
-                });
-                if (!response.ok) return null;
-                const result = await response.json();
-                return `data:image/png;base64,${result.predictions[0].bytesBase64Encoded}`;
-            } catch (e) { return null; }
-        }
-
-        async function playAudio(key) {
-            const text = audioMap[key];
-            if (!text) return;
-
-            try {
-                const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
-                const response = await fetch(url, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        contents: [{ parts: [{ text: text }] }],
-                        generationConfig: {
-                            responseModalities: ["AUDIO"],
-                            speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: "Puck" } } }
-                        }
-                    })
-                });
-
-                const result = await response.json();
-                const audioData = result.candidates?.[0]?.content?.parts?.find(p => p.inlineData)?.inlineData?.data;
-                
-                if (audioData) {
-                    const blob = pcmToWav(audioData, 24000);
-                    new Audio(URL.createObjectURL(blob)).play();
-                }
-            } catch (e) { console.error(e); }
-        }
-
-        function pcmToWav(base64, sampleRate) {
-            const binaryString = window.atob(base64);
-            const len = binaryString.length;
-            const bytes = new Uint8Array(len);
-            for (let i = 0; i < len; i++) bytes[i] = binaryString.charCodeAt(i);
-            const buffer = new ArrayBuffer(44 + len);
-            const view = new DataView(buffer);
-            const writeString = (pos, str) => { for (let i = 0; i < str.length; i++) view.setUint8(pos + i, str.charCodeAt(i)); };
-            writeString(0, 'RIFF');
-            view.setUint32(4, 36 + len, true);
-            writeString(8, 'WAVE');
-            writeString(12, 'fmt ');
-            view.setUint32(16, 16, true);
-            view.setUint16(20, 1, true);
-            view.setUint16(22, 1, true);
-            view.setUint32(24, sampleRate, true);
-            view.setUint32(28, sampleRate * 2, true);
-            view.setUint16(32, 2, true);
-            view.setUint16(34, 16, true);
-            writeString(36, 'data');
-            view.setUint32(40, len, true);
-            for (let i = 0; i < len; i++) view.setUint8(44 + i, bytes[i]);
-            return new Blob([buffer], { type: 'audio/wav' });
-        }
-
-        document.getElementById('searchInput').addEventListener('keypress', (e) => { if (e.key === 'Enter') handleSearch(); });
-    </script>
-</body>
-</html>
+        {!result && !loading && (
+          <div className="text-center py-20 animate-pulse">
+            <div className="bg-slate-100 w-24 h-24 rounded-full flex items-center justify-center mx-auto mb-6">
+              <Book className="w-10 h-10 text-slate-300" />
+            </div>
+            <h3 className="text-slate-400 font-bold">Ayo masukkan kata pertama Anda hari ini!</h3>
+          </div>
+        )}
+      </div>
+      
+      <footer className="text-center mt-16 text-slate-400 text-[10px] font-bold tracking-[0.2em] uppercase">
+        Dibangun dengan ✨ Kecerdasan Buatan untuk Generasi Robbani
+      </footer>
+    </div>
+  );
+}
